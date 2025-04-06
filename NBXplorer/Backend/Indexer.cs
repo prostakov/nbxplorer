@@ -93,6 +93,18 @@ namespace NBXplorer.Backend
 			try
 			{
 				await IndexerLoopCore(cts.Token);
+				
+				// For Haroldcoin, add a delay between connection attempts to avoid tight loops
+				if (!cts.Token.IsCancellationRequested && Network.CryptoCode == "HRLD")
+				{
+					Logger.LogInformation($"Haroldcoin: Waiting 30 seconds before next sync check...");
+					try
+					{
+						await Task.Delay(TimeSpan.FromSeconds(30), cts.Token);
+					}
+					catch { }
+				}
+				
 				if (!cts.Token.IsCancellationRequested)
 					goto retry;
 			}
@@ -143,15 +155,30 @@ namespace NBXplorer.Backend
 		Connection _Connection;
 		private async Task IndexerLoopCore(CancellationToken token)
 		{
-			await ConnectNode(token);
-			var connection = _Connection;
+			Connection connection = null;
 			
-			// Special handling for Haroldcoin
-			if (Network.CryptoCode == "HRLD")
+			// Special handling for Haroldcoin - try to connect but don't depend on it
+			if (Network.CryptoCode == "HRLD") 
 			{
+				try 
+				{
+					await ConnectNode(token);
+					connection = _Connection;
+				}
+				catch (Exception ex)
+				{
+					// For Haroldcoin, log but continue even if connection fails
+					Logger.LogWarning($"P2P connection to Haroldcoin node failed: {ex.Message}. Will continue with RPC sync.");
+				}
+				
+				// Always use our specialized sync regardless of connection success
 				await HaroldcoinSyncLoop(connection, token);
 				return;
 			}
+			
+			// Standard handling for other cryptocurrencies
+			await ConnectNode(token);
+			connection = _Connection;
 			
 			await foreach (var item in connection.Events.Reader.ReadAllAsync(token))
 			{
@@ -452,7 +479,7 @@ namespace NBXplorer.Backend
 		}
 
 		static int[] BlockLocatorComposition = new[] { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 40, 80, 160, 320, 640, 1280, 2560, 5120, 10240, 20480, 40960 };
-		private async Task SaveProgress(DbConnectionHelper conn)
+		public async Task SaveProgress(DbConnectionHelper conn)
 		{
 			// We pick blocks spaced exponentially from the the tip to build our block locator
 			var heights = BlockLocatorComposition.Select(l => lastIndexedBlock.Height - l).ToArray();
@@ -486,7 +513,7 @@ namespace NBXplorer.Backend
 		}
 
 		// Version of UpdateState that doesn't require a Node
-		private async Task UpdateStateWithoutNode()
+		public async Task UpdateStateWithoutNode()
 		{
 			var blockchainInfo = await RPCClient.GetBlockchainInfoAsyncEx();
 			if (blockchainInfo.IsSynching(Network))
@@ -616,7 +643,7 @@ namespace NBXplorer.Backend
 			return blockLocator;
 		}
 
-		private async Task SaveMatches(DbConnectionHelper conn, Block block, SlimChainedBlock slimChainedBlock)
+		public async Task SaveMatches(DbConnectionHelper conn, Block block, SlimChainedBlock slimChainedBlock)
 		{
 			block.Header.PrecomputeHash(false, false);
 			// If we are synching, the block time is better approximation of the received time
@@ -630,7 +657,7 @@ namespace NBXplorer.Backend
 
 		SlimChainedBlock _NodeTip;
 
-		private async Task SaveMatches(DbConnectionHelper conn, List<Transaction> transactions, SlimChainedBlock slimChainedBlock, bool fireEvents, DateTimeOffset? seenAt = null)
+		public async Task SaveMatches(DbConnectionHelper conn, List<Transaction> transactions, SlimChainedBlock slimChainedBlock, bool fireEvents, DateTimeOffset? seenAt = null)
 		{
 			foreach (var tx in transactions)
 				tx.PrecomputeHash(false, true);
@@ -738,6 +765,16 @@ namespace NBXplorer.Backend
 
 		private void Node_Disconnected(Node node)
 		{
+			// For Haroldcoin, don't reset state if we're already synced via RPC or syncing
+			if (Network.CryptoCode == "HRLD" && (State == BitcoinDWaiterState.Ready || State == BitcoinDWaiterState.NBXplorerSynching))
+			{
+				Logger.LogInformation($"Node disconnected ({node.DisconnectReason.Reason}) - Haroldcoin will continue using RPC");
+				node.MessageReceived -= Node_MessageReceived;
+				node.Disconnected -= Node_Disconnected;
+				// Don't change state or dispose connection - allow RPC sync to continue
+				return;
+			}
+			
 			Logger.LogInformation($"Node disconnected ({node.DisconnectReason.Reason})");
 			_Connection?.Dispose();
 			node.MessageReceived -= Node_MessageReceived;
@@ -817,339 +854,30 @@ namespace NBXplorer.Backend
 		// Specialized loop for Haroldcoin to handle its P2P protocol differences
 		private async Task HaroldcoinSyncLoop(Connection connection, CancellationToken token)
 		{
-			Logger.LogInformation($"Starting specialized Haroldcoin synchronization loop");
-			
 			// Create a persistent connection to handle DB operations
 			await using var dbConn = await ConnectionFactory.CreateConnectionHelper(Network);
 			
-			// Get the current blockchain info to start with
-			var blockchainInfo = await RPCClient.GetBlockchainInfoAsyncEx();
-			var startHeight = lastIndexedBlock?.Height ?? 0;
-			var targetHeight = blockchainInfo.Headers;
+			// Even if P2P connection is null, we can still sync via RPC
+			if (connection == null)
+			{
+				Logger.LogInformation("No P2P connection available for Haroldcoin, using RPC-only sync");
+			}
 			
-			Logger.LogInformation($"Haroldcoin: Syncing from height {startHeight} to {targetHeight}");
-			
-			// Skip P2P sync attempts and go directly to RPC sync for Haroldcoin
-			Logger.LogInformation("Haroldcoin: Using direct RPC sync for more reliable synchronization");
-			await FallbackToDirectSync(dbConn, token);
-			return;
+			// Call our refactored method in HaroldcoinIndexer
+			await HaroldcoinIndexer.HaroldcoinSyncLoop(this, dbConn, RPCClient, Logger, token);
 		}
-		
-		private async Task FallbackToDirectSync(DbConnectionHelper dbConn, CancellationToken token)
+
+		// Add these methods to expose the _NodeTip functionality
+		public bool HasNullNodeTip()
 		{
-			try
-			{
-				// Get current blockchain info
-				var blockchainInfo = await RPCClient.GetBlockchainInfoAsyncEx();
-				var startHeight = lastIndexedBlock?.Height ?? 0;
-				var endHeight = blockchainInfo.Headers;
-				
-				Logger.LogInformation($"Haroldcoin: Direct sync from height {startHeight} to {endHeight}");
-				
-				// Check for blocks with height 0 (potential issue)
-				await FixBlockHeightsInDatabase(dbConn);
-				
-				// IMPORTANT: Initialize _NodeTip if it's null to prevent NullReferenceException in SaveMatches
-				if (_NodeTip == null)
-				{
-					// Get the best block hash and create a SlimChainedBlock for it
-					var bestBlockHash = await RPCClient.GetBestBlockHashAsync();
-					_NodeTip = new SlimChainedBlock(bestBlockHash, uint256.Zero, (int)endHeight);
-					Logger.LogInformation($"Initialized _NodeTip with height {endHeight} and hash {bestBlockHash}");
-				}
-				
-				// Process one block at a time for maximum reliability
-				for (int height = (int)startHeight + 1; height <= endHeight; height++)
-				{
-					// Retry logic for important operations
-					int maxRetries = 3;
-					int retryDelay = 500; // milliseconds
-					bool blockProcessed = false;
-					
-					for (int retryCount = 0; retryCount < maxRetries && !blockProcessed; retryCount++)
-					{
-						try
-						{
-							// If this is a retry, log it and wait before trying again
-							if (retryCount > 0)
-							{
-								Logger.LogWarning($"Haroldcoin: Retry #{retryCount} for block at height {height}");
-								await Task.Delay(retryDelay * retryCount, token);
-							}
-							
-							// Get the block hash at this height - critical step
-							var hash = await RPCClient.GetBlockHashAsync(height);
-							if (hash == null)
-							{
-								Logger.LogWarning($"Haroldcoin: Could not get hash for block at height {height}");
-								continue; // Try again if we have retries left
-							}
-							
-							// Log progress every 100 blocks
-							if (height % 100 == 0 || height == (int)startHeight + 1 || height == endHeight)
-							{
-								double progressPct = (height - startHeight) * 100.0 / (endHeight - startHeight);
-								Logger.LogInformation($"Haroldcoin: Syncing block {height}/{endHeight} - {progressPct:F2}% complete");
-							}
-							
-							// Get the block - critical step
-							var block = await RPCClient.GetBlockAsync(hash);
-							if (block == null)
-							{
-								Logger.LogWarning($"Haroldcoin: Could not get block at height {height} (hash: {hash})");
-								continue; // Try again if we have retries left
-							}
-							
-							// Create SlimChainedBlock directly without using GetBlockHeaderAsyncEx
-							uint256 previousBlockHash = null;
-							if (height > 0)
-							{
-								// For non-genesis blocks, get the previous hash from the block itself
-								previousBlockHash = block.Header.HashPrevBlock;
-							}
-							
-							var slimChainedBlock = new SlimChainedBlock(
-								hash: hash,
-								prev: height == 0 ? uint256.Zero : previousBlockHash,
-								height: height);
-							
-							Logger.LogInformation($"Haroldcoin: Created header for block at height {height} (hash: {hash}, prev: {previousBlockHash})");
-							
-							// Save the block
-							await SaveMatches(dbConn, block, slimChainedBlock);
-							
-							// Mark as successfully processed
-							blockProcessed = true;
-							
-							// Save progress periodically
-							if (height % 10 == 0)
-							{
-								await SaveProgress(dbConn);
-								await UpdateStateWithoutNode();
-							}
-						}
-						catch (Exception ex)
-						{
-							Logger.LogError(ex, $"Error processing block at height {height}, retry {retryCount+1}/{maxRetries}");
-							
-							// If this was our last retry, and it's still failing
-							if (retryCount == maxRetries - 1)
-							{
-								// This is important: we need to decide whether to continue or abort the sync
-								// For now, we'll just log and continue to the next height
-								Logger.LogWarning($"Haroldcoin: Failed to process block at height {height} after {maxRetries} attempts, skipping to next height");
-								
-								// Add a slightly longer delay before moving to the next block
-								await Task.Delay(retryDelay * 2, token);
-							}
-						}
-					}
-				}
-				
-				// Final save of progress
-				await SaveProgress(dbConn);
-				await UpdateStateWithoutNode();
-				
-				// Fix any remaining blocks with incorrect heights
-				await FixBlockHeightsInDatabase(dbConn);
-				
-				Logger.LogInformation($"Haroldcoin: Direct sync completed to height {endHeight}");
-				
-				// Add an extra consistency check for blocks that might have been missed
-				await CheckForMissingBlocks(dbConn, (int)startHeight, (int)endHeight);
-			}
-			catch (Exception ex)
-			{
-				Logger.LogError(ex, "Error in direct sync");
-				throw;
-			}
+			return _NodeTip == null;
 		}
-		
-		/// <summary>
-		/// Checks for missing blocks in the height range and attempts to retrieve them
-		/// </summary>
-		private async Task CheckForMissingBlocks(DbConnectionHelper dbConn, int startHeight, int endHeight)
+
+		public void InitializeNodeTip(SlimChainedBlock nodeTip)
 		{
-			try
-			{
-				Logger.LogInformation($"Checking for missing blocks in range {startHeight}-{endHeight}...");
-				
-				// Get all heights in the database for our crypto code
-				var existingHeights = (await dbConn.Connection.QueryAsync<int>(
-					"SELECT height FROM blks WHERE code=@code AND height BETWEEN @startHeight AND @endHeight ORDER BY height",
-					new { code = Network.CryptoCode, startHeight, endHeight })).ToHashSet();
-				
-				// Find missing heights
-				var missingHeights = new List<int>();
-				for (int height = startHeight + 1; height <= endHeight; height++)
-				{
-					if (!existingHeights.Contains(height))
-					{
-						missingHeights.Add(height);
-					}
-				}
-				
-				if (missingHeights.Count == 0)
-				{
-					Logger.LogInformation("No missing blocks found in the database.");
-					return;
-				}
-				
-				Logger.LogWarning($"Found {missingHeights.Count} missing blocks in the database. Attempting to retrieve them...");
-				
-				// Process missing blocks
-				int processedCount = 0;
-				foreach (var height in missingHeights)
-				{
-					try
-					{
-						// Get the block hash
-						var hash = await RPCClient.GetBlockHashAsync(height);
-						if (hash == null)
-						{
-							Logger.LogWarning($"Could not get hash for missing block at height {height}");
-							continue;
-						}
-						
-						// Get the block
-						var block = await RPCClient.GetBlockAsync(hash);
-						if (block == null)
-						{
-							Logger.LogWarning($"Could not get missing block at height {height} (hash: {hash})");
-							continue;
-						}
-						
-						// Create SlimChainedBlock
-						uint256 previousBlockHash = null;
-						if (height > 0)
-						{
-							previousBlockHash = block.Header.HashPrevBlock;
-						}
-						
-						var slimChainedBlock = new SlimChainedBlock(
-							hash: hash,
-							prev: height == 0 ? uint256.Zero : previousBlockHash,
-							height: height);
-						
-						// Save the block
-						await SaveMatches(dbConn, block, slimChainedBlock);
-						processedCount++;
-						
-						Logger.LogInformation($"Successfully processed missing block at height {height} (hash: {hash})");
-						
-						// Save progress periodically
-						if (processedCount % 10 == 0)
-						{
-							await SaveProgress(dbConn);
-							await UpdateStateWithoutNode();
-						}
-					}
-					catch (Exception ex)
-					{
-						Logger.LogError(ex, $"Error processing missing block at height {height}");
-					}
-				}
-				
-				// Final save after processing missing blocks
-				if (processedCount > 0)
-				{
-					await SaveProgress(dbConn);
-					await UpdateStateWithoutNode();
-					Logger.LogInformation($"Successfully processed {processedCount} missing blocks");
-				}
-			}
-			catch (Exception ex)
-			{
-				Logger.LogError(ex, "Error checking for missing blocks");
-			}
+			_NodeTip = nodeTip;
 		}
-		
-		/// <summary>
-		/// Checks for blocks with height 0 in the database and corrects them based on their position in the chain
-		/// </summary>
-		private async Task FixBlockHeightsInDatabase(DbConnectionHelper dbConn)
-		{
-			if (Network.CryptoCode != "HRLD")
-				return;
-				
-			try
-			{
-				Logger.LogInformation("Checking for blocks with incorrect heights in database...");
-				
-				// Query to find blocks with height 0 (except genesis block)
-				var blocksWithZeroHeight = await dbConn.Connection.QueryAsync<(string blk_id, string prev_id)>(
-					"SELECT blk_id, prev_id FROM blks WHERE code=@code AND height=0 AND prev_id IS NOT NULL",
-					new { code = Network.CryptoCode });
-					
-				var blocks = blocksWithZeroHeight.ToList();
-				if (blocks.Count == 0)
-				{
-					Logger.LogInformation("No blocks with incorrect heights found.");
-					return;
-				}
-				
-				Logger.LogWarning($"Found {blocks.Count} blocks with height 0 that need fixing");
-				
-				// Create a lookup by previous hash
-				var blocksByPrev = blocks.ToDictionary(b => b.prev_id, b => b.blk_id);
-				
-				// Get genesis block
-				var genesisHash = await RPCClient.GetBlockHashAsync(0);
-				if (genesisHash == null)
-				{
-					Logger.LogWarning("Could not get genesis block hash");
-					return;
-				}
-				
-				// Get the current height from the node
-				var blockchainInfo = await RPCClient.GetBlockchainInfoAsyncEx();
-				
-				// Fix blocks by traversing the chain from genesis
-				var currentHash = genesisHash.ToString();
-				int height = 0;
-				int fixedCount = 0;
-				
-				while (blocksByPrev.TryGetValue(currentHash, out var nextHash))
-				{
-					height++;
-					try
-					{
-						// Update the height in the database
-						await dbConn.Connection.ExecuteAsync(
-							"UPDATE blks SET height=@height WHERE code=@code AND blk_id=@blk_id",
-							new { code = Network.CryptoCode, blk_id = nextHash, height });
-							
-						currentHash = nextHash;
-						fixedCount++;
-						
-						if (fixedCount % 100 == 0)
-						{
-							Logger.LogInformation($"Fixed {fixedCount} block heights so far");
-						}
-					}
-					catch (Exception ex)
-					{
-						Logger.LogError(ex, $"Error fixing height for block {nextHash}");
-						break;
-					}
-				}
-				
-				Logger.LogInformation($"Fixed heights for {fixedCount} blocks");
-				
-				// One more check for any blocks missed by the chain traversal
-				var remainingZeroHeights = await dbConn.Connection.QueryAsync<int>(
-					"SELECT COUNT(*) FROM blks WHERE code=@code AND height=0 AND prev_id IS NOT NULL",
-					new { code = Network.CryptoCode });
-					
-				if (remainingZeroHeights.First() > 0)
-				{
-					Logger.LogWarning($"There are still {remainingZeroHeights.First()} blocks with height 0 that couldn't be fixed automatically");
-				}
-			}
-			catch (Exception ex)
-			{
-				Logger.LogError(ex, "Error checking for blocks with incorrect heights");
-			}
-		}
+
+		public SlimChainedBlock LastIndexedBlock => lastIndexedBlock;
 	}
 }

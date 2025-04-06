@@ -5,11 +5,16 @@ using System.Threading;
 using System.Threading.Tasks;
 using System;
 using NBitcoin.Protocol;
+using System.Collections.Concurrent;
+using Newtonsoft.Json.Linq;
 
 namespace NBXplorer
 {
     public static class HaroldcoinHelper
     {
+        // Cache for block heights to avoid excessive RPC calls
+        private static readonly ConcurrentDictionary<string, int> _cachedHeights = new ConcurrentDictionary<string, int>();
+        
         /// <summary>
         /// Gets a genesis block locator without relying on GetGenesis()
         /// </summary>
@@ -69,8 +74,8 @@ namespace NBXplorer
             // If still empty, use a hardcoded known block hash for Haroldcoin
             if (blockLocator.Blocks.Count == 0)
             {
-                // Hardcoded fallback for Haroldcoin genesis (you should replace this with the actual genesis hash)
-                var hardcodedHash = new uint256("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f");
+                // Hardcoded fallback for Haroldcoin genesis (replace with actual genesis hash)
+                var hardcodedHash = new uint256("00000f2fddbb7212e6f36f398461e8ad49dba752608c9c7322cb97e9a893b485");
                 blockLocator.Blocks.Add(hardcodedHash);
                 logger.LogWarning($"Using hardcoded genesis fallback: {hardcodedHash}");
             }
@@ -103,6 +108,124 @@ namespace NBXplorer
             {
                 logger.LogError(ex, "Error sending genesis headers request");
             }
+        }
+        
+        /// <summary>
+        /// Gets the height for a given block, with caching for efficiency
+        /// </summary>
+        public static async Task<int> GetBlockHeightSafe(RPCClient rpcClient, uint256 blockHash, ILogger logger, CancellationToken token = default)
+        {
+            var hashStr = blockHash.ToString();
+            
+            // Check the cache first
+            if (_cachedHeights.TryGetValue(hashStr, out var cachedHeight))
+            {
+                return cachedHeight;
+            }
+            
+            try
+            {
+                // Try to get the block directly to extract its height
+                var blockResponse = await rpcClient.SendCommandAsync(
+                    new RPCRequest("getblock", new[] { hashStr })
+                    {
+                        ThrowIfRPCError = false
+                    }, token);
+                
+                if (blockResponse?.Result is JObject block)
+                {
+                    // Try to get height from the response
+                    if (block["height"] is JToken heightToken && heightToken.Type == JTokenType.Integer)
+                    {
+                        var height = heightToken.Value<int>();
+                        if (height >= 0)
+                        {
+                            // Cache the result
+                            _cachedHeights.TryAdd(hashStr, height);
+                            return height;
+                        }
+                    }
+                    
+                    // Alternative approach: Try to calculate from confirmations
+                    if (block["confirmations"] is JToken confsToken && confsToken.Type == JTokenType.Integer)
+                    {
+                        var confs = confsToken.Value<int>();
+                        // If confirmations are valid, we can estimate the height
+                        if (confs > 0)
+                        {
+                            try
+                            {
+                                // Get current block count
+                                var blockCountResponse = await rpcClient.SendCommandAsync(
+                                    new RPCRequest("getblockcount", Array.Empty<object>())
+                                    {
+                                        ThrowIfRPCError = false
+                                    }, token);
+                                
+                                if (blockCountResponse?.Result != null)
+                                {
+                                    var currentHeight = blockCountResponse.Result.Value<int>();
+                                    var height = currentHeight - confs + 1;
+                                    
+                                    // Cache the result
+                                    _cachedHeights.TryAdd(hashStr, height);
+                                    return height;
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                logger.LogError(ex, $"Error calculating height from confirmations for block {hashStr}");
+                            }
+                        }
+                    }
+                }
+                
+                // Is it the genesis block?
+                try
+                {
+                    var genesisHash = await rpcClient.GetBlockHashAsync(0);
+                    if (genesisHash == blockHash)
+                    {
+                        _cachedHeights.TryAdd(hashStr, 0);
+                        return 0;
+                    }
+                }
+                catch { /* Ignore */ }
+                
+                // Fall back to a safe value if all else fails
+                logger.LogWarning($"Could not determine height for block {hashStr}, using fallback value 1");
+                return 1;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, $"Error getting height for block {hashStr}");
+                return 1; // Safe fallback
+            }
+        }
+        
+        /// <summary>
+        /// A utility method to safely extract values from a JToken with a default value if not found
+        /// </summary>
+        public static T SafeGetValue<T>(JToken token, string property, T defaultValue)
+        {
+            try
+            {
+                if (token == null || token[property] == null)
+                    return defaultValue;
+                return token[property].Value<T>();
+            }
+            catch
+            {
+                return defaultValue;
+            }
+        }
+        
+        /// <summary>
+        /// Clears the height cache, useful when the blockchain may have reorganized
+        /// </summary>
+        public static void ClearHeightCache()
+        {
+            _cachedHeights.Clear();
         }
     }
 } 

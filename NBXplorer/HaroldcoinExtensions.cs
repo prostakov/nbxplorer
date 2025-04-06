@@ -62,12 +62,12 @@ namespace NBXplorer
                                 // Basic fields that we need
                                 var peerInfo = new SimplePeerInfo
                                 {
-                                    Id = peer["id"]?.Value<int>() ?? 0,
-                                    SubVersion = peer["subver"]?.Value<string>() ?? string.Empty
+                                    Id = HaroldcoinHelper.SafeGetValue<int>(peer, "id", 0),
+                                    SubVersion = HaroldcoinHelper.SafeGetValue<string>(peer, "subver", string.Empty)
                                 };
                                 
                                 // Try to parse address if available
-                                var addrStr = peer["addr"]?.Value<string>();
+                                var addrStr = HaroldcoinHelper.SafeGetValue<string>(peer, "addr", null);
                                 if (!string.IsNullOrEmpty(addrStr))
                                 {
                                     try
@@ -86,14 +86,14 @@ namespace NBXplorer
                                 }
                                 
                                 // Add services if available
-                                if (peer["services"]?.Value<string>() != null)
+                                if (HaroldcoinHelper.SafeGetValue<string>(peer, "services", null) != null)
                                 {
                                     // Add a basic "NETWORK" service for compatibility
                                     peerInfo.ServicesNames.Add("NETWORK");
                                 }
                                 
                                 // Add whitelisted status if available
-                                if (peer["whitelisted"]?.Value<bool>() == true)
+                                if (HaroldcoinHelper.SafeGetValue<bool>(peer, "whitelisted", false))
                                 {
                                     peerInfo.IsWhiteListed = true;
                                 }
@@ -170,236 +170,101 @@ namespace NBXplorer
                     return null;
                     
                 JToken response = header.Result;
-                
-                // Create a safe method to extract values
-                T SafeGetValue<T>(JToken token, string property, T defaultValue)
-                {
-                    try
-                    {
-                        if (token == null || token[property] == null)
-                            return defaultValue;
-                        return token[property].Value<T>();
-                    }
-                    catch
-                    {
-                        return defaultValue;
-                    }
-                }
-                
-                // Extract values safely
-                long confs = SafeGetValue<long>(response, "confirmations", 0);
+
+                // Extract values safely using shared helper
+                long confs = HaroldcoinHelper.SafeGetValue<long>(response, "confirmations", 0);
                 if (confs == -1)
                     return null;
                     
-                string prevHashStr = SafeGetValue<string>(response, "previousblockhash", null);
+                string prevHashStr = HaroldcoinHelper.SafeGetValue<string>(response, "previousblockhash", null);
                 uint256 previousBlockHash = prevHashStr != null ? new uint256(prevHashStr) : null;
                 
                 // Try to get the height from the response
-                int height = SafeGetValue<int>(response, "height", -1);
+                int height = HaroldcoinHelper.SafeGetValue<int>(response, "height", -1);
                 
-                // If height is not provided or is invalid, try to retrieve it directly
-                if (height <= 0 && confs > 0)
-                {
-                    try
-                    {
-                        // Get current block count
-                        var blockCountResponse = await rpc.SendCommandAsync(new RPCRequest("getblockcount", Array.Empty<object>())
-                        {
-                            ThrowIfRPCError = false
-                        }, cancellationToken);
-                        
-                        if (blockCountResponse != null && blockCountResponse.Result != null)
-                        {
-                            var currentHeight = blockCountResponse.Result.Value<int>();
-                            height = currentHeight - (int)confs + 1; // +1 because current block has 1 confirmation
-                        }
-                    }
-                    catch
-                    {
-                        // If this fails, we'll keep the height as is
-                    }
-                }
-                
-                // If we still don't have a valid height
+                // If height is not provided or is invalid, try to use available methods
                 if (height <= 0)
                 {
-                    Console.WriteLine($"WARNING: Block {blk} has invalid height: {height}. Will attempt to use a reasonable value.");
-                    
-                    // As a last resort, try to get the hash for height 0 to check if this is the genesis block
-                    try
-                    {
-                        var genesisResponse = await rpc.SendCommandAsync(new RPCRequest("getblockhash", new object[] { 0 })
-                        {
-                            ThrowIfRPCError = false
-                        }, cancellationToken);
-                        
-                        if (genesisResponse != null && genesisResponse.Result != null)
-                        {
-                            var genesisHash = genesisResponse.Result.Value<string>();
-                            if (genesisHash == blk.ToString())
-                            {
-                                // This is the genesis block
-                                height = 0;
-                            }
-                            else
-                            {
-                                // Not genesis, use a reasonable value based on previous block if available
-                                height = 1; // Default to 1 if we can't figure it out
-                            }
-                        }
-                    }
-                    catch
-                    {
-                        // If all else fails, use 1 as a safer default than 0
-                        height = 1;
-                    }
+                    height = await HaroldcoinHelper.GetBlockHeightSafe(rpc, blk, null, cancellationToken);
                 }
                 
-                long timeUnix = SafeGetValue<long>(response, "time", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
-                DateTimeOffset time = NBitcoin.Utils.UnixTimeToDateTime(timeUnix);
+                string merkleRootStr = HaroldcoinHelper.SafeGetValue<string>(response, "merkleroot", null);
+                uint256 merkleRoot = merkleRootStr != null ? new uint256(merkleRootStr) : null;
                 
-                string merkleRootStr = SafeGetValue<string>(response, "merkleroot", "0000000000000000000000000000000000000000000000000000000000000000");
-                uint256 merkleRoot = new uint256(merkleRootStr);
+                uint nonce = HaroldcoinHelper.SafeGetValue<uint>(response, "nonce", 0);
+                uint bits = HaroldcoinHelper.SafeGetValue<uint>(response, "bits", 0);
+                uint version = HaroldcoinHelper.SafeGetValue<uint>(response, "version", 0);
+                DateTimeOffset medianTime = HaroldcoinHelper.SafeGetValue<DateTimeOffset>(response, "mediantime", DateTimeOffset.MinValue);
+                if (medianTime == DateTimeOffset.MinValue)
+                {
+                    medianTime = HaroldcoinHelper.SafeGetValue<DateTimeOffset>(response, "time", DateTimeOffset.UtcNow);
+                }
                 
-                return new RPCBlockHeader(blk, previousBlockHash, height, time, merkleRoot);
+                // Create the RPCBlockHeader with the extracted information
+                return new RPCBlockHeader(
+                    blk,
+                    previousBlockHash,
+                    height,
+                    medianTime,
+                    merkleRoot
+                );
             }
-            catch
+            catch (Exception ex)
             {
-                // If anything fails, return null instead of throwing
+                // Log the exception and return null
+                Console.WriteLine($"Error in SafeGetBlockHeaderAsyncEx: {ex.Message}");
                 return null;
             }
         }
-        
-        // Cache for block heights to avoid excessive RPC calls
-        private static Dictionary<string, int> _blockHeightCache = new Dictionary<string, int>();
-        
+
         /// <summary>
-        /// Special method to get block header information for Haroldcoin, using height tracking
+        /// Special implementation for Haroldcoin that handles the lack of height information
         /// </summary>
         private static async Task<RPCBlockHeader> GetHaroldcoinBlockHeader(RPCClient rpc, uint256 blk, CancellationToken cancellationToken = default)
         {
             try
             {
-                // First, try using getblock instead of getblockheader, with verbosity=1
-                var blockResponse = await rpc.SendCommandAsync(new RPCRequest("getblock", new object[] { blk.ToString(), 1 })
+                // Try to use the full getblock command to ensure maximum data availability
+                var result = await rpc.SendCommandAsync(new RPCRequest("getblock", new[] { blk.ToString() })
                 {
                     ThrowIfRPCError = false
                 }, cancellationToken);
                 
-                if (blockResponse == null || blockResponse.Result == null || blockResponse.Error != null)
-                    return null;
-                
-                JToken response = blockResponse.Result;
-                
-                // Create a safe method to extract values
-                T SafeGetValue<T>(JToken token, string property, T defaultValue)
+                if (result == null || result.Result == null || result.Error != null)
                 {
-                    try
+                    // Fall back to getblockheader if getblock fails
+                    result = await rpc.SendCommandAsync(new RPCRequest("getblockheader", new[] { blk.ToString() })
                     {
-                        if (token == null || token[property] == null)
-                            return defaultValue;
-                        return token[property].Value<T>();
-                    }
-                    catch
-                    {
-                        return defaultValue;
-                    }
+                        ThrowIfRPCError = false
+                    }, cancellationToken);
+                    
+                    if (result == null || result.Result == null || result.Error != null)
+                        return null;
                 }
                 
-                string prevHashStr = SafeGetValue<string>(response, "previousblockhash", null);
+                JToken response = result.Result;
+                
+                // Try to get the height - this is the main challenge with Haroldcoin
+                int height = await HaroldcoinHelper.GetBlockHeightSafe(rpc, blk, null, cancellationToken);
+                
+                // Extract the necessary fields to construct an RPCBlockHeader
+                string prevHashStr = HaroldcoinHelper.SafeGetValue<string>(response, "previousblockhash", null);
                 uint256 previousBlockHash = prevHashStr != null ? new uint256(prevHashStr) : null;
                 
-                // Calculate height through multiple methods
-                int height = -1;
-                long confirmations = SafeGetValue<long>(response, "confirmations", 0);
+                string merkleRootStr = HaroldcoinHelper.SafeGetValue<string>(response, "merkleroot", null);
+                uint256 merkleRoot = merkleRootStr != null ? new uint256(merkleRootStr) : null;
                 
-                // Method 1: Check if this is the genesis block
-                if (previousBlockHash == null)
-                {
-                    // This is likely the genesis block
-                    height = 0;
-                    _blockHeightCache[blk.ToString()] = height;
-                    Console.WriteLine($"Haroldcoin: Identified genesis block {blk}");
-                }
-                // Method 2: Calculate from chain tip using confirmations
-                else if (confirmations > 0)
-                {
-                    try
-                    {
-                        var chainInfo = await rpc.SendCommandAsync(new RPCRequest("getblockchaininfo", Array.Empty<object>())
-                        {
-                            ThrowIfRPCError = false
-                        }, cancellationToken);
-                        
-                        if (chainInfo != null && chainInfo.Result != null)
-                        {
-                            var currentHeight = chainInfo.Result["blocks"].Value<int>();
-                            height = currentHeight - (int)confirmations + 1;
-                            _blockHeightCache[blk.ToString()] = height;
-                            Console.WriteLine($"Haroldcoin: Calculated height {height} for block {blk} using confirmations");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"Error calculating height from chain tip: {ex.Message}");
-                    }
-                }
-                // Method 3: Calculate from previous block's height
-                if (height < 0 && previousBlockHash != null)
-                {
-                    // Check if the previous block's height is in our cache
-                    string prevHashString = previousBlockHash.ToString();
-                    if (_blockHeightCache.TryGetValue(prevHashString, out int prevHeight))
-                    {
-                        height = prevHeight + 1;
-                        _blockHeightCache[blk.ToString()] = height;
-                        Console.WriteLine($"Haroldcoin: Calculated height {height} for block {blk} using previous block");
-                    }
-                    else
-                    {
-                        // Try to get the previous block's height
-                        try
-                        {
-                            var prevHeader = await SafeGetBlockHeaderAsyncEx(rpc, previousBlockHash, cancellationToken);
-                            if (prevHeader != null && prevHeader.Height >= 0)
-                            {
-                                height = prevHeader.Height + 1;
-                                _blockHeightCache[blk.ToString()] = height;
-                                Console.WriteLine($"Haroldcoin: Calculated height {height} for block {blk} using previous block lookup");
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"Error calculating height from previous block: {ex.Message}");
-                        }
-                    }
-                }
+                // Get the time, defaulting to current time if not available
+                DateTimeOffset blockTime = HaroldcoinHelper.SafeGetValue<DateTimeOffset>(response, "time", DateTimeOffset.UtcNow);
                 
-                // If all methods failed, make an educated guess
-                if (height < 0)
-                {
-                    // As a last resort, if we've seen other blocks, use a value in the middle of the range
-                    if (_blockHeightCache.Count > 0)
-                    {
-                        height = _blockHeightCache.Values.Max() + 1;
-                        Console.WriteLine($"Haroldcoin: Using fallback height {height} for block {blk}");
-                    }
-                    else
-                    {
-                        // If we haven't seen any blocks yet, this might be early in the chain
-                        height = 1; // Safe assumption that's not the genesis block
-                        Console.WriteLine($"Haroldcoin: Using default height {height} for block {blk}");
-                    }
-                    _blockHeightCache[blk.ToString()] = height;
-                }
-                
-                long timeUnix = SafeGetValue<long>(response, "time", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
-                DateTimeOffset time = NBitcoin.Utils.UnixTimeToDateTime(timeUnix);
-                
-                string merkleRootStr = SafeGetValue<string>(response, "merkleroot", "0000000000000000000000000000000000000000000000000000000000000000");
-                uint256 merkleRoot = new uint256(merkleRootStr);
-                
-                return new RPCBlockHeader(blk, previousBlockHash, height, time, merkleRoot);
+                // Create the RPCBlockHeader with the information we were able to extract
+                return new RPCBlockHeader(
+                    blk,
+                    previousBlockHash,
+                    height,
+                    blockTime,
+                    merkleRoot
+                );
             }
             catch (Exception ex)
             {
