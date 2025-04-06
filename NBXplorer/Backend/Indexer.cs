@@ -335,7 +335,11 @@ namespace NBXplorer.Backend
 					waitTime = Math.Min(5_000, waitTime * 2);
 					goto retry;
 				}
-				await RPCClient.EnsureWalletCreated(Logger);
+				
+				// Disable creation of wallet
+				// await RPCClient.EnsureWalletCreated(Logger);
+				Logger.LogInformation("Skipping creation of wallet");
+				
 				if (Network.NBitcoinNetwork.ChainName == ChainName.Regtest && !ChainConfiguration.NoWarmup)
 				{
 					if (await RPCClient.WarmupBlockchain(Logger))
