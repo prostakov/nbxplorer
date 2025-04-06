@@ -74,6 +74,25 @@
       },
       "applicationUrl": "http://localhost:4774",
       "launchUrl": ""
+    },
+    "Haroldcoin": {
+      "commandName": "Project",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "NBXPLORER_NETWORK": "haroldcoin-main",
+        "NBXPLORER_CHAINS": "hrld",
+        "NBXPLORER_BTCRPCURL": "http://127.0.0.1:25674/",
+        "NBXPLORER_BTCNODEENDPOINT": "127.0.0.1:25676",
+        "NBXPLORER_NOAUTH": "true",
+        "NBXPLORER_EXPOSERPC": "true",
+        "NBXPLORER_BTCRPCUSER": "user",
+        "NBXPLORER_BTCRPCPASSWORD": "password",
+        "NBXPLORER_POSTGRES": "User ID=postgres;Password=postgres;Application Name=test;Include Error Detail=true;Host=localhost;Port=39384",
+        "NBXPLORER_BTCNODEVERSION": "70920",
+        "NBXPLORER_BTCNODEMAGIC": "0xe82b65ad"
+      },
+      "applicationUrl": "http://localhost:4774",
+      "launchUrl": ""
     }
   }
 }
