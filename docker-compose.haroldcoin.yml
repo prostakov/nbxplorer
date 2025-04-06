@@ -1,0 +1,30 @@
+version: '3.9'
+name: haroldcoin
+
+services:
+  haroldcoin:
+    container_name: haroldcoin_node
+    image: dock.atticstudios.be/haroldcoin/masternodes/docker-haroldnode/haroldnode:0.2.0
+    ports:
+      - 25674:25674
+      - 25676:25676
+    volumes:
+      - haroldcoin_data:/hrldz
+
+  postgres:
+    container_name: haroldcoin_nbxplorer_postgres
+    image: postgres:13.13
+    command: [ "-c", "random_page_cost=1.0", "-c", "shared_preload_libraries=pg_stat_statements" ]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - 39384:5432
+    volumes:
+      - postgres_data:/var/lib/postgresql/data:rw
+
+volumes:
+  haroldcoin_data:
+    name: haroldcoin_data
+  postgres_data:
+    name: haroldcoin_nbxplorer_postgres_data
