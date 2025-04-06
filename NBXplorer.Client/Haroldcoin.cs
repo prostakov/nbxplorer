@@ -157,7 +157,8 @@ public class Haroldcoin : NetworkSetBase
         .SetRPCPort(43247)
         .SetName("haroldcoin-test")
         .AddAlias("haroldcoin-testnet")
-        .AddSeeds(new NetworkAddress[0]);
+        .AddSeeds(new NetworkAddress[0])
+        .SetGenesis("00000f2fddbb7212e6f36f398461e8ad49dba752608c9c7322cb97e9a893b485");
 
         return builder;
     }
@@ -193,7 +194,8 @@ public class Haroldcoin : NetworkSetBase
         .SetRPCPort(43249)
         .SetName("haroldcoin-regtest")
         .AddAlias("haroldcoin-regtest")
-        .AddSeeds(new NetworkAddress[0]);
+        .AddSeeds(new NetworkAddress[0])
+        .SetGenesis("00000f2fddbb7212e6f36f398461e8ad49dba752608c9c7322cb97e9a893b485");
 
         return builder;
     }
