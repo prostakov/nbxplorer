@@ -320,24 +320,8 @@ namespace NBXplorer
 
 		public static async Task<RPCBlockHeader> GetBlockHeaderAsyncEx(this RPCClient rpc, uint256 blk, CancellationToken cancellationToken)
 		{
-			var header = await rpc.SendCommandAsync(new NBitcoin.RPC.RPCRequest("getblockheader", new[] { blk.ToString() })
-			{
-				ThrowIfRPCError = false
-			}, cancellationToken);
-			if (header.Result is null || header.Error is not null)
-				return null;
-			var response = header.Result;
-			var confs = response["confirmations"].Value<long>();
-			if (confs == -1)
-				return null;
-
-			var prev = response["previousblockhash"]?.Value<string>();
-			return new RPCBlockHeader(
-				blk,
-				prev is null ? null : new uint256(prev),
-				response["height"].Value<int>(),
-				NBitcoin.Utils.UnixTimeToDateTime(response["time"].Value<long>()),
-				new uint256(response["merkleroot"]?.Value<string>()));
+			// Use the safe method from HaroldcoinExtensions for all cryptocurrencies
+			return await rpc.SafeGetBlockHeaderAsyncEx(blk, cancellationToken);
 		}
 
 		public static async Task<SavedTransaction> TryGetRawTransaction(this RPCClient client, uint256 txId, CancellationToken cancellationToken)
@@ -406,7 +390,7 @@ namespace NBXplorer
 				var downloaded = new HashSet<uint256>();
 				if (blocks.Count == 0)
 					return downloaded;
-				var peers = (await rpc.GetPeersInfoAsync(cancellationToken))
+				var peers = (await rpc.SafeGetPeersInfoAsync(cancellationToken))
 									.Where(p => p.ServicesNames?.Contains("NETWORK") is true)
 									.ToArray();
 				NBitcoin.Utils.Shuffle(peers);
