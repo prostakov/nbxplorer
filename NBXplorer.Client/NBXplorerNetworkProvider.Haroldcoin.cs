@@ -9,8 +9,9 @@ public partial class NBXplorerNetworkProvider
 	{
 		Add(new NBXplorerNetwork(Haroldcoin.Instance, networkType)
 		{
-			MinRPCVersion = 70910,
-			CoinType = networkType == ChainName.Mainnet ? new KeyPath("35104'") : new KeyPath("1'")
+			// TODO: Adjust to haroldcoin needs
+			// MinRPCVersion = 70910,
+			// CoinType = networkType == ChainName.Mainnet ? new KeyPath("35104'") : new KeyPath("1'")
 		});
 	}
 }
