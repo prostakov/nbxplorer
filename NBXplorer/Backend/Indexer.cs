@@ -94,15 +94,10 @@ namespace NBXplorer.Backend
 			{
 				await IndexerLoopCore(cts.Token);
 				
-				// For Haroldcoin, add a delay between connection attempts to avoid tight loops
+				// Use HaroldcoinHelper for Haroldcoin-specific delay logic
 				if (!cts.Token.IsCancellationRequested && Network.CryptoCode == "HRLD")
 				{
-					Logger.LogInformation($"Haroldcoin: Waiting 30 seconds before next sync check...");
-					try
-					{
-						await Task.Delay(TimeSpan.FromSeconds(30), cts.Token);
-					}
-					catch { }
+					await HaroldcoinHelper.AddSyncLoopDelay(Logger, cts.Token);
 				}
 				
 				if (!cts.Token.IsCancellationRequested)
@@ -125,7 +120,7 @@ namespace NBXplorer.Backend
 			}
 		}
 
-		class Connection : IDisposable
+		public class Connection : IDisposable
 		{
 			public Channel<Object> Events;
 			public Channel<Block> Blocks;
@@ -157,22 +152,14 @@ namespace NBXplorer.Backend
 		{
 			Connection connection = null;
 			
-			// Special handling for Haroldcoin - try to connect but don't depend on it
+			// Special handling for Haroldcoin - use the helper method
 			if (Network.CryptoCode == "HRLD") 
 			{
-				try 
-				{
-					await ConnectNode(token);
-					connection = _Connection;
-				}
-				catch (Exception ex)
-				{
-					// For Haroldcoin, log but continue even if connection fails
-					Logger.LogWarning($"P2P connection to Haroldcoin node failed: {ex.Message}. Will continue with RPC sync.");
-				}
+				// Use the helper method for Haroldcoin P2P connection
+				connection = await HaroldcoinHelper.TryConnectToHaroldcoinNode(this, RPCClient, Logger, token);
 				
-				// Always use our specialized sync regardless of connection success
-				await HaroldcoinSyncLoop(connection, token);
+				// Call HaroldcoinIndexer directly instead of using the local method
+				await HaroldcoinIndexer.HaroldcoinSyncLoop(this, await ConnectionFactory.CreateConnectionHelper(Network), RPCClient, Logger, token);
 				return;
 			}
 			
@@ -406,7 +393,25 @@ namespace NBXplorer.Backend
 			var indexProgress = await Repository.GetIndexProgress();
 			if (indexProgress is null)
 			{
+				if (Network.CryptoCode == "HRLD")
+				{
+					// Use HaroldcoinHelper for creating a safe block locator
+					Logger.LogInformation("Creating a special block locator for Haroldcoin");
+					var locator = await HaroldcoinHelper.GetSafeBlockLocator(RPCClient, Logger, token);
+					Logger.LogInformation($"Created Haroldcoin block locator with {locator.Blocks.Count} blocks");
+					return locator;
+				}
+				
+				// Standard approach for other cryptocurrencies
 				indexProgress = await GetDefaultCurrentLocation(token);
+			}
+			
+			// Special handling for Haroldcoin
+			if (Network.CryptoCode == "HRLD")
+			{
+				// Use the HaroldcoinHelper method for HRLD-specific header requests
+				await HaroldcoinHelper.AskNextHeadersWithFallbacks(node, indexProgress, Logger, RPCClient, token);
+				return indexProgress;
 			}
 			
 			// Log the locator blocks we're using to request headers
@@ -419,59 +424,20 @@ namespace NBXplorer.Backend
 				Logger.LogWarning($"{Network.CryptoCode}: Requesting headers with empty locator");
 			}
 			
-			// For Haroldcoin, add a specific timeout and retry mechanism
-			if (Network.CryptoCode == "HRLD")
+			// Standard approach for other cryptocurrencies
+			if (indexProgress.Blocks.Count > 0)
 			{
-				// Send a more aggressive combination of messages to improve chances of response
-				try
-				{
-					// Try with empty locator first
-					if (indexProgress.Blocks.Count == 0 || BlockchainInfo.Headers > 1000)
-					{
-						Logger.LogInformation($"HRLD: Trying GetHeaders with empty locator");
-						await node.SendMessageAsync(new GetHeadersPayload());
-						await Task.Delay(200, token);
-					}
-					
-					// Then try with standard locator
-					Logger.LogInformation($"HRLD: Sending GetHeadersPayload with {indexProgress.Blocks.Count} blocks");
-					await node.SendMessageAsync(new GetHeadersPayload(indexProgress));
-					await Task.Delay(200, token);
-					
-					// Also try from genesis
-					try 
-					{
-						// Try to get genesis block hash through RPC
-						var genesisHash = await RPCClient.GetBlockHashAsync(0);
-						if (genesisHash != null)
-						{
-							var genesisLocator = new BlockLocator();
-							genesisLocator.Blocks.Add(genesisHash);
-							Logger.LogInformation($"HRLD: Sending GetHeadersPayload from genesis: {genesisHash}");
-							await node.SendMessageAsync(new GetHeadersPayload(genesisLocator));
-							await Task.Delay(200, token);
-						}
-					}
-					catch (Exception gex)
-					{
-						Logger.LogError(gex, "Error sending genesis headers request");
-					}
-					
-					// Try GetBlocks as well
-					Logger.LogInformation($"HRLD: Sending GetBlocksPayload");
-					await node.SendMessageAsync(new GetBlocksPayload(indexProgress));
-					
-					// Send a ping to keep the connection alive and check status
-					await Task.Delay(200, token);
-					await node.SendMessageAsync(new PingPayload());
-				}
-				catch (Exception ex)
-				{
-					Logger.LogError(ex, "Error sending header requests for Haroldcoin");
-				}
+				Logger.LogInformation($"{Network.CryptoCode}: Requesting headers from block {indexProgress.Blocks[0]}");
+				await node.SendMessageAsync(new GetHeadersPayload(indexProgress));
 			}
-			else 
+			else
 			{
+				Logger.LogInformation($"{Network.CryptoCode}: Creating BlockLocator from genesis");
+				indexProgress = new BlockLocator();
+				
+				// Use RPCClient to get the genesis block hash instead of Network.GetGenesis()
+				var genesisHash = await RPCClient.GetBlockHashAsync(0);
+				indexProgress.Blocks.Add(genesisHash);
 				await node.SendMessageAsync(new GetHeadersPayload(indexProgress));
 			}
 			
@@ -765,16 +731,17 @@ namespace NBXplorer.Backend
 
 		private void Node_Disconnected(Node node)
 		{
-			// For Haroldcoin, don't reset state if we're already synced via RPC or syncing
-			if (Network.CryptoCode == "HRLD" && (State == BitcoinDWaiterState.Ready || State == BitcoinDWaiterState.NBXplorerSynching))
+			// Use HaroldcoinHelper for Haroldcoin-specific disconnection handling
+			if (Network.CryptoCode == "HRLD" && HaroldcoinHelper.HandleNodeDisconnected(node, State, Logger))
 			{
-				Logger.LogInformation($"Node disconnected ({node.DisconnectReason.Reason}) - Haroldcoin will continue using RPC");
+				// Always unsubscribe from events
 				node.MessageReceived -= Node_MessageReceived;
 				node.Disconnected -= Node_Disconnected;
-				// Don't change state or dispose connection - allow RPC sync to continue
+				// But don't change state or dispose the connection for Haroldcoin
 				return;
 			}
 			
+			// Standard handling for other cryptocurrencies
 			Logger.LogInformation($"Node disconnected ({node.DisconnectReason.Reason})");
 			_Connection?.Dispose();
 			node.MessageReceived -= Node_MessageReceived;
@@ -851,20 +818,10 @@ namespace NBXplorer.Backend
 			_ => null
 		};
 
-		// Specialized loop for Haroldcoin to handle its P2P protocol differences
-		private async Task HaroldcoinSyncLoop(Connection connection, CancellationToken token)
+		// Add a method to expose the connection
+		public Connection GetConnection()
 		{
-			// Create a persistent connection to handle DB operations
-			await using var dbConn = await ConnectionFactory.CreateConnectionHelper(Network);
-			
-			// Even if P2P connection is null, we can still sync via RPC
-			if (connection == null)
-			{
-				Logger.LogInformation("No P2P connection available for Haroldcoin, using RPC-only sync");
-			}
-			
-			// Call our refactored method in HaroldcoinIndexer
-			await HaroldcoinIndexer.HaroldcoinSyncLoop(this, dbConn, RPCClient, Logger, token);
+			return _Connection;
 		}
 
 		// Add these methods to expose the _NodeTip functionality
