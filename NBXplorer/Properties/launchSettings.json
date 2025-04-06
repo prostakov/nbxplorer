@@ -85,11 +85,9 @@
         "NBXPLORER_BTCNODEENDPOINT": "127.0.0.1:25676",
         "NBXPLORER_NOAUTH": "true",
         "NBXPLORER_EXPOSERPC": "true",
-        "NBXPLORER_BTCRPCUSER": "user",
-        "NBXPLORER_BTCRPCPASSWORD": "password",
-        "NBXPLORER_POSTGRES": "User ID=postgres;Password=postgres;Application Name=test;Include Error Detail=true;Host=localhost;Port=39384",
-        "NBXPLORER_BTCNODEVERSION": "70920",
-        "NBXPLORER_BTCNODEMAGIC": "0xe82b65ad"
+        "NBXPLORER_HRLDRPCUSER": "user",
+        "NBXPLORER_HRLDRPCPASSWORD": "password",
+        "NBXPLORER_POSTGRES": "User ID=postgres;Password=postgres;Application Name=test;Include Error Detail=true;Host=localhost;Port=39384"
       },
       "applicationUrl": "http://localhost:4774",
       "launchUrl": ""

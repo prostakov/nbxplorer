@@ -111,11 +111,12 @@ public class Haroldcoin : NetworkSetBase
         .SetBase58Bytes(Base58Type.EXT_SECRET_KEY, new byte[] { 0x2D, 0x21, 0x4C, 0x2B })
         .SetBech32(Bech32Type.WITNESS_PUBKEY_ADDRESS, Encoders.Bech32("hrld"))
         .SetBech32(Bech32Type.WITNESS_SCRIPT_ADDRESS, Encoders.Bech32("hrld"))
-        .SetMagic(0xe82b65ad)
+        .SetMagic(0xad652be8)
         .SetPort(25676)
         .SetRPCPort(25674)
         .SetName("haroldcoin-main")
         .AddAlias("haroldcoin-mainnet")
+        .SetMaxP2PVersion(70910)
         .AddDNSSeeds(new[]
         {
             new DNSSeedData("64.227.126.212", "64.227.126.212")
@@ -152,11 +153,12 @@ public class Haroldcoin : NetworkSetBase
         .SetBase58Bytes(Base58Type.EXT_SECRET_KEY, new byte[] { 0x3a, 0x80, 0x58, 0x37 })
         .SetBech32(Bech32Type.WITNESS_PUBKEY_ADDRESS, Encoders.Bech32("thrld"))
         .SetBech32(Bech32Type.WITNESS_SCRIPT_ADDRESS, Encoders.Bech32("thrld"))
-        .SetMagic(0x51b3aba0)
+        .SetMagic(0xa0abb351)
         .SetPort(43246)
         .SetRPCPort(43247)
         .SetName("haroldcoin-test")
         .AddAlias("haroldcoin-testnet")
+        .SetMaxP2PVersion(70910)
         .AddSeeds(new NetworkAddress[0])
         .SetGenesis("00000f2fddbb7212e6f36f398461e8ad49dba752608c9c7322cb97e9a893b485");
 
@@ -189,11 +191,12 @@ public class Haroldcoin : NetworkSetBase
         .SetBase58Bytes(Base58Type.EXT_SECRET_KEY, new byte[] { 0x3a, 0x80, 0x58, 0x37 })
         .SetBech32(Bech32Type.WITNESS_PUBKEY_ADDRESS, Encoders.Bech32("rhrld"))
         .SetBech32(Bech32Type.WITNESS_SCRIPT_ADDRESS, Encoders.Bech32("rhrld"))
-        .SetMagic(0xfabfb5da)
+        .SetMagic(0xdab5bffa)
         .SetPort(43248)
         .SetRPCPort(43249)
         .SetName("haroldcoin-regtest")
         .AddAlias("haroldcoin-regtest")
+        .SetMaxP2PVersion(70910)
         .AddSeeds(new NetworkAddress[0])
         .SetGenesis("00000f2fddbb7212e6f36f398461e8ad49dba752608c9c7322cb97e9a893b485");
 
