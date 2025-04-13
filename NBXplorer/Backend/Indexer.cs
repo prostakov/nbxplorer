@@ -158,8 +158,12 @@ namespace NBXplorer.Backend
 				// Use the helper method for Haroldcoin P2P connection
 				connection = await HaroldcoinHelper.TryConnectToHaroldcoinNode(this, RPCClient, Logger, token);
 				
-				// Call HaroldcoinIndexer directly instead of using the local method
-				await HaroldcoinIndexer.HaroldcoinSyncLoop(this, await ConnectionFactory.CreateConnectionHelper(Network), RPCClient, Logger, token);
+				// Create a new connection and ensure it's disposed after use
+				await using (var dbConn = await ConnectionFactory.CreateConnectionHelper(Network))
+				{
+					// Call HaroldcoinIndexer directly instead of using the local method
+					await HaroldcoinIndexer.HaroldcoinSyncLoop(this, dbConn, RPCClient, Logger, token);
+				}
 				return;
 			}
 			

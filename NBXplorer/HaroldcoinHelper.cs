@@ -9,6 +9,7 @@ using NBitcoin.Protocol;
 using System.Collections.Concurrent;
 using Newtonsoft.Json.Linq;
 using NBXplorer.Backend;
+using System.Data.Common;
 
 namespace NBXplorer
 {
@@ -70,6 +71,14 @@ namespace NBXplorer
             const int delaySeconds = 30;
             logger.LogInformation($"Haroldcoin: Waiting {delaySeconds} seconds before next sync check...");
             
+            // Perform periodic pool cleanup every 10 minutes
+            if (DateTime.UtcNow.Minute % 10 == 0 && DateTime.UtcNow.Second < 30)
+            {
+                logger.LogInformation("Performing periodic RefreshConnection");
+                // Just call the cleanup portion of RefreshConnection
+                await RefreshConnection(connectionFactory, network, currentConn, logger);
+            }
+            
             try
             {
                 await Task.Delay(TimeSpan.FromSeconds(delaySeconds), token);
@@ -79,7 +88,32 @@ namespace NBXplorer
                 // Ignore cancellation
             }
         }
-
+        
+        /// <summary>
+        /// Performs memory cleanup operations to help prevent connection pool exhaustion
+        /// </summary>
+        public static void PerformMemoryCleanup(ILogger logger)
+        {
+            try
+            {
+                // Clear height cache to reduce memory pressure
+                ClearHeightCache();
+                
+                // Force garbage collection to release resources including db connections
+                GC.Collect(GC.MaxGeneration, GCCollectionMode.Optimized, true);
+                GC.WaitForPendingFinalizers();
+                
+                // Second collection to clean up anything freed by finalizers
+                GC.Collect(GC.MaxGeneration, GCCollectionMode.Optimized, true);
+                
+                logger.LogDebug("Memory cleanup completed");
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Error during memory cleanup");
+            }
+        }
+        
         /// <summary>
         /// Gets a genesis block locator without relying on GetGenesis()
         /// </summary>
@@ -418,6 +452,46 @@ namespace NBXplorer
             }
             
             return blockLocator;
+        }
+        
+        /// <summary>
+        /// Safely refreshes the database connection to prevent connection pool exhaustion
+        /// </summary>
+        public static async Task<DbConnectionHelper> RefreshConnection(DbConnectionFactory factory, NBXplorerNetwork network, DbConnectionHelper currentConn, ILogger logger)
+        {
+            try
+            {
+                // First perform memory cleanup to release any resources
+                logger.LogInformation("Refreshing database connection and cleaning up resources");
+                PerformMemoryCleanup(logger);
+                
+                // Dispose the current connection if it exists
+                if (currentConn != null)
+                {
+                    try
+                    {
+                        await currentConn.DisposeAsync();
+                        logger.LogDebug("Successfully disposed previous database connection");
+                        
+                        // Important: Set the original reference to null to prevent double-disposal attempts
+                        currentConn = null;
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex, "Error disposing database connection, will create a new one anyway");
+                    }
+                }
+                
+                // Create a new connection
+                var newConn = await factory.CreateConnectionHelper(network);
+                logger.LogDebug("Created fresh database connection");
+                return newConn;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to refresh database connection");
+                throw;
+            }
         }
     }
 } 

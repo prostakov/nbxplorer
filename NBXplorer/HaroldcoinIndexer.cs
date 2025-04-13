@@ -44,6 +44,14 @@ namespace NBXplorer
                     logger.LogInformation("Haroldcoin: Using direct RPC sync for more reliable synchronization");
                 }
                 
+                // Refresh the connection if we're about to do significant work to prevent connection pool exhaustion
+                if (targetHeight - startHeight > 100)
+                {
+                    // Log that we're refreshing the connection
+                    logger.LogInformation("Refreshing database connection before large sync operation");
+                    dbConn = await HaroldcoinHelper.RefreshConnection(indexer.ConnectionFactory, indexer.Network, dbConn, logger);
+                }
+                
                 // Call the sync method, passing the database check result to avoid duplicate query
                 await DirectSyncBlocks(indexer, dbConn, rpcClient, logger, token, startHeight, targetHeight, highestBlockInDb);
             }
@@ -112,9 +120,28 @@ namespace NBXplorer
                 var totalBlocksToProcess = endHeight - startHeight;
                 var processedCount = 0;
                 
+                // Track when to refresh the connection (every 500 blocks processed)
+                const int connectionRefreshInterval = 500;
+                int blocksSinceRefresh = 0;
+                
                 // Process one block at a time for maximum reliability
                 for (int height = (int)startHeight + 1; height <= endHeight; height++)
                 {
+                    // Check if we need to refresh the connection periodically to prevent pool exhaustion
+                    // Only during large sync operations (more than 100 blocks total)
+                    blocksSinceRefresh++;
+                    if (totalBlocksToProcess > 100 && blocksSinceRefresh >= connectionRefreshInterval)
+                    {
+                        logger.LogInformation($"Refreshing database connection after processing {blocksSinceRefresh} blocks");
+                        
+                        // Create a fresh connection via the helper which now includes GC
+                        var freshConn = await HaroldcoinHelper.RefreshConnection(indexer.ConnectionFactory, indexer.Network, dbConn, logger);
+                        
+                        // Reassign dbConn to the fresh connection
+                        dbConn = freshConn;
+                        blocksSinceRefresh = 0;
+                    }
+                    
                     // Retry logic for important operations
                     int maxRetries = 3;
                     int retryDelay = 500; // milliseconds
@@ -203,6 +230,18 @@ namespace NBXplorer
                 await indexer.SaveProgress(dbConn);
                 await indexer.UpdateStateWithoutNode();
                 
+                // For large syncs, refresh the connection before maintenance tasks
+                if (endHeight - startHeight > 100)
+                {
+                    logger.LogInformation("Refreshing database connection before final maintenance tasks");
+                    
+                    // Create a fresh connection via the helper which includes GC
+                    var freshConn = await HaroldcoinHelper.RefreshConnection(indexer.ConnectionFactory, indexer.Network, dbConn, logger);
+                    
+                    // Reassign dbConn to the fresh connection
+                    dbConn = freshConn;
+                }
+                
                 // Fix any remaining blocks with incorrect heights
                 await FixBlockHeightsInDatabase(dbConn, rpcClient, "HRLD", logger);
                 
@@ -273,12 +312,28 @@ namespace NBXplorer
                 
                 logger.LogWarning($"Found {missingHeights.Count} missing blocks in the database. Attempting to retrieve them...");
                 
+                // If we have many missing blocks, refresh the connection before processing
+                if (missingHeights.Count > 100)
+                {
+                    logger.LogInformation($"Refreshing database connection before processing {missingHeights.Count} missing blocks");
+                    dbConn = await HaroldcoinHelper.RefreshConnection(indexer.ConnectionFactory, indexer.Network, dbConn, logger);
+                }
+                
                 // Process missing blocks
                 int processedCount = 0;
+                const int connectionRefreshInterval = 100;
+                
                 foreach (var height in missingHeights)
                 {
                     try
                     {
+                        // Check if we need to refresh the connection periodically
+                        if (processedCount > 0 && processedCount % connectionRefreshInterval == 0)
+                        {
+                            logger.LogInformation($"Refreshing database connection after processing {connectionRefreshInterval} missing blocks");
+                            dbConn = await HaroldcoinHelper.RefreshConnection(indexer.ConnectionFactory, indexer.Network, dbConn, logger);
+                        }
+                        
                         // Get the block hash
                         var hash = await rpcClient.GetBlockHashAsync(height);
                         if (hash == null)
