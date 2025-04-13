@@ -97,7 +97,7 @@ namespace NBXplorer.Backend
 				// Use HaroldcoinHelper for Haroldcoin-specific delay logic
 				if (!cts.Token.IsCancellationRequested && Network.CryptoCode == "HRLD")
 				{
-					await HaroldcoinHelper.AddSyncLoopDelay(Logger, cts.Token);
+					await HaroldcoinHelper.AddSyncLoopDelay(Logger, cts.Token, ConnectionFactory, Network);
 				}
 				
 				if (!cts.Token.IsCancellationRequested)

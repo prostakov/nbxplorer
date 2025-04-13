@@ -66,17 +66,26 @@ namespace NBXplorer
         /// <summary>
         /// Adds a delay between sync loops for Haroldcoin to prevent tight loops
         /// </summary>
-        public static async Task AddSyncLoopDelay(ILogger logger, CancellationToken token)
+        public static async Task AddSyncLoopDelay(ILogger logger, CancellationToken token, DbConnectionFactory factory = null, NBXplorerNetwork network = null)
         {
             const int delaySeconds = 30;
             logger.LogInformation($"Haroldcoin: Waiting {delaySeconds} seconds before next sync check...");
             
             // Perform periodic pool cleanup every 10 minutes
-            if (DateTime.UtcNow.Minute % 10 == 0 && DateTime.UtcNow.Second < 30)
+            if (DateTime.UtcNow.Minute % 10 == 0 && DateTime.UtcNow.Second < 30 && factory != null && network != null)
             {
-                logger.LogInformation("Performing periodic RefreshConnection");
-                // Just call the cleanup portion of RefreshConnection
-                await RefreshConnection(connectionFactory, network, currentConn, logger);
+                logger.LogInformation("Performing periodic connection refresh");
+                try
+                {
+                    // Create a temporary connection and immediately dispose it
+                    // This helps keep the connection pool healthy
+                    var tempConn = await factory.CreateConnectionHelper(network);
+                    await RefreshConnection(factory, network, tempConn, logger);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Error during periodic connection refresh, continuing normally");
+                }
             }
             
             try
