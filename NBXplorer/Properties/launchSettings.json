@@ -87,7 +87,7 @@
         "NBXPLORER_EXPOSERPC": "true",
         "NBXPLORER_HRLDRPCUSER": "user",
         "NBXPLORER_HRLDRPCPASSWORD": "password",
-        "NBXPLORER_POSTGRES": "Host=localhost;Port=39384;Username=postgres;Password=postgres;Database=postgres;Application Name=nbxplorer;Maximum Pool Size=100;Connection Idle Lifetime=300;Connection Pruning Interval=10;Include Error Detail=true;Timeout=120;Command Timeout=120;No Reset On Close=true"
+        "NBXPLORER_POSTGRES": "Host=localhost;Port=39384;Username=postgres;Password=postgres;Database=postgres;Application Name=nbxplorer;Maximum Pool Size=100;Include Error Detail=true;"
       },
       "applicationUrl": "http://localhost:4774",
       "launchUrl": ""
