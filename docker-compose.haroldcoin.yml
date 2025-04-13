@@ -10,11 +10,23 @@ services:
       - 25676:25676
     volumes:
       - haroldcoin_data:/hrldz
+    environment:
+      POSTGRES: "Host=postgres;Username=postgres;Password=postgres;Database=postgres;Maximum Pool Size=100;Connection Idle Lifetime=300;Connection Pruning Interval=10;Timeout=120;Command Timeout=120;Connection Idle Lifetime=300;Connection Pruning Interval=10;No Reset On Close=true;Keep Alive=60;Tcp Keepalive=true;Tcp Keepalive Time=30;Tcp Keepalive Interval=10;Tcp Keepalive Retries=3"
 
   postgres:
     container_name: haroldcoin_nbxplorer_postgres
     image: postgres:13.13
-    command: [ "-c", "random_page_cost=1.0", "-c", "shared_preload_libraries=pg_stat_statements" ]
+    command: [
+      "-c", "random_page_cost=1.0",
+      "-c", "shared_preload_libraries=pg_stat_statements",
+      "-c", "max_connections=200",
+      "-c", "shared_buffers=256MB",
+      "-c", "effective_cache_size=768MB",
+      "-c", "idle_in_transaction_session_timeout=600000",
+      "-c", "statement_timeout=120000",
+      "-c", "lock_timeout=60000",
+      "-c", "idle_session_timeout=600000"
+    ]
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -22,6 +34,11 @@ services:
       - 39384:5432
     volumes:
       - postgres_data:/var/lib/postgresql/data:rw
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   haroldcoin_data:
