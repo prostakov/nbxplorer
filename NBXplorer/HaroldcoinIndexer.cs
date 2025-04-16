@@ -26,8 +26,18 @@ namespace NBXplorer
 
             try
             {
+                // Make sure state is set correctly at the beginning
+                indexer.State = BitcoinDWaiterState.NBXplorerSynching;
+                
                 // Get the current blockchain info to start with
                 var blockchainInfo = await rpcClient.GetBlockchainInfoAsyncEx();
+                
+                // If the node is syncing, update the state accordingly
+                if (blockchainInfo.IsSynching(indexer.Network))
+                {
+                    indexer.State = BitcoinDWaiterState.CoreSynching;
+                    logger.LogInformation("Haroldcoin: Node is still syncing blockchain, state updated to CoreSynching");
+                }
                 
                 // First, check the actual data in our database to ensure we start from the right height
                 var highestBlockInDb = await GetHighestBlockInDatabase(dbConn, "HRLD", logger);
@@ -69,8 +79,21 @@ namespace NBXplorer
         {
             try
             {
+                // Ensure state is properly set at the beginning
+                indexer.State = BitcoinDWaiterState.NBXplorerSynching;
+                
                 // Get current blockchain info
                 var blockchainInfo = await rpcClient.GetBlockchainInfoAsyncEx();
+                
+                // If the node is syncing, update state accordingly
+                if (blockchainInfo.IsSynching(indexer.Network))
+                {
+                    indexer.State = BitcoinDWaiterState.CoreSynching;
+                    logger.LogInformation("Haroldcoin: Node is still syncing blockchain, state updated to CoreSynching");
+                    
+                    // We should still continue with our sync even if the node is syncing,
+                    // as we can sync up to the node's current height
+                }
                 
                 // Use provided values or get from blockchain/indexer
                 var startHeight = overrideStartHeight ?? indexer.SyncHeight ?? 0;
@@ -100,6 +123,9 @@ namespace NBXplorer
                         
                         // Update state and wait for new blocks
                         await indexer.UpdateStateWithoutNode();
+                        
+                        // Explicitly set to Ready state when we're at the latest height
+                        indexer.State = BitcoinDWaiterState.Ready;
                         
                         // Check for blocks with height 0 as a maintenance task while waiting
                         await FixBlockHeightsInDatabase(dbConn, rpcClient, "HRLD", logger);
@@ -208,6 +234,13 @@ namespace NBXplorer
                             {
                                 await indexer.SaveProgress(dbConn);
                                 await indexer.UpdateStateWithoutNode();
+                                
+                                // Set Ready state if we're within 6 blocks of the chain tip
+                                if (endHeight - height <= 6)
+                                {
+                                    indexer.State = BitcoinDWaiterState.Ready;
+                                    logger.LogInformation("Haroldcoin: State set to Ready as we're near the chain tip");
+                                }
                             }
                         }
                         catch (Exception ex)
@@ -229,6 +262,9 @@ namespace NBXplorer
                 // Final save of progress
                 await indexer.SaveProgress(dbConn);
                 await indexer.UpdateStateWithoutNode();
+                
+                // Explicitly set to Ready state at end of sync
+                indexer.State = BitcoinDWaiterState.Ready;
                 
                 // For large syncs, refresh the connection before maintenance tasks
                 if (endHeight - startHeight > 100)

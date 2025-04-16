@@ -27,9 +27,9 @@ namespace NBXplorer
         public static bool HandleNodeDisconnected(Node node, BitcoinDWaiterState currentState, ILogger logger)
         {
             // For Haroldcoin, don't reset state if we're already synced via RPC or syncing
-            if (currentState == BitcoinDWaiterState.Ready || currentState == BitcoinDWaiterState.NBXplorerSynching)
+            if (currentState == BitcoinDWaiterState.Ready || currentState == BitcoinDWaiterState.NBXplorerSynching || currentState == BitcoinDWaiterState.CoreSynching)
             {
-                logger.LogInformation($"Node disconnected ({node.DisconnectReason.Reason}) - Haroldcoin will continue using RPC");
+                logger.LogInformation($"Node disconnected ({node.DisconnectReason.Reason}) - Haroldcoin will continue using RPC and maintain current state ({currentState})");
                 // Let the caller handle the event unsubscription
                 return true;
             }

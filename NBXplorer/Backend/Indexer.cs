@@ -155,6 +155,9 @@ namespace NBXplorer.Backend
 			// Special handling for Haroldcoin - use the helper method
 			if (Network.CryptoCode == "HRLD") 
 			{
+				// Set state to NBXplorerSynching to ensure GetConnectedClient() works properly
+				State = BitcoinDWaiterState.NBXplorerSynching;
+				
 				// Use the helper method for Haroldcoin P2P connection
 				connection = await HaroldcoinHelper.TryConnectToHaroldcoinNode(this, RPCClient, Logger, token);
 				
