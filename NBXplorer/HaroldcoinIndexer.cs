@@ -29,6 +29,13 @@ namespace NBXplorer
                 // Make sure state is set correctly at the beginning
                 indexer.State = BitcoinDWaiterState.NBXplorerSynching;
                 
+                // Scan and set RPC capabilities to prevent null capabilities
+                if (rpcClient.Capabilities == null)
+                {
+                    logger.LogInformation("RPC capabilities are null, scanning capabilities for Haroldcoin");
+                    rpcClient.Capabilities = await HaroldcoinHelper.SafeScanRPCCapabilitiesAsync(rpcClient, logger, token);
+                }
+                
                 // Get the current blockchain info to start with
                 var blockchainInfo = await rpcClient.GetBlockchainInfoAsyncEx();
                 
@@ -81,6 +88,13 @@ namespace NBXplorer
             {
                 // Ensure state is properly set at the beginning
                 indexer.State = BitcoinDWaiterState.NBXplorerSynching;
+                
+                // Ensure RPC capabilities are initialized
+                if (rpcClient.Capabilities == null)
+                {
+                    logger.LogInformation("RPC capabilities are null in DirectSyncBlocks, scanning capabilities for Haroldcoin");
+                    rpcClient.Capabilities = await HaroldcoinHelper.SafeScanRPCCapabilitiesAsync(rpcClient, logger, token);
+                }
                 
                 // Get current blockchain info
                 var blockchainInfo = await rpcClient.GetBlockchainInfoAsyncEx();

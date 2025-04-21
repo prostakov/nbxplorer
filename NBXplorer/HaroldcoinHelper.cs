@@ -47,6 +47,13 @@ namespace NBXplorer
             
             try
             {
+                // Initialize RPC capabilities if needed
+                if (rpc.Capabilities == null)
+                {
+                    logger.LogInformation("Initializing RPC capabilities during connection to Haroldcoin node");
+                    rpc.Capabilities = await SafeScanRPCCapabilitiesAsync(rpc, logger, token);
+                }
+                
                 // We can't directly call ConnectNode since it's private
                 // Instead, let the Indexer handle the connection in its IndexerLoopCore method
                 logger.LogInformation("Connection to Haroldcoin P2P node will be handled by the Indexer");
@@ -500,6 +507,118 @@ namespace NBXplorer
             {
                 logger.LogError(ex, "Failed to refresh database connection");
                 throw;
+            }
+        }
+        
+        /// <summary>
+        /// Safely scans RPC capabilities for Haroldcoin with proper error handling
+        /// </summary>
+        public static async Task<RPCCapabilities> SafeScanRPCCapabilitiesAsync(RPCClient rpcClient, ILogger logger, CancellationToken token = default)
+        {
+            try
+            {
+                logger.LogInformation("Scanning Haroldcoin RPC capabilities");
+                
+                // Try the standard scan first
+                try
+                {
+                    var capabilities = await rpcClient.ScanRPCCapabilitiesAsync(token);
+                    if (capabilities != null)
+                    {
+                        logger.LogInformation($"Successfully scanned Haroldcoin RPC capabilities: Version={capabilities.Version}");
+                        return capabilities;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning($"Standard capability scan failed: {ex.Message}. Using fallback method.");
+                }
+                
+                // Fallback: Manually create capabilities
+                var fallbackCapabilities = new NBitcoin.RPC.RPCCapabilities();
+                
+                // Try to get version info
+                try
+                {
+                    // Send a direct RPC command to get version information
+                    var versionResponse = await rpcClient.SendCommandAsync(new NBitcoin.RPC.RPCRequest("getnetworkinfo", Array.Empty<object>()), token);
+                    if (versionResponse?.Result != null && versionResponse.Result["version"] != null)
+                    {
+                        var versionNumber = versionResponse.Result["version"].Value<int>();
+                        fallbackCapabilities.Version = versionNumber;
+                        logger.LogInformation($"Detected Haroldcoin version: {versionNumber}");
+                    }
+                    else
+                    {
+                        // Try with the get info command as fallback for older nodes
+                        var infoResponse = await rpcClient.SendCommandAsync(new NBitcoin.RPC.RPCRequest("getinfo", Array.Empty<object>()), token);
+                        if (infoResponse?.Result != null && infoResponse.Result["version"] != null)
+                        {
+                            var versionNumber = infoResponse.Result["version"].Value<int>();
+                            fallbackCapabilities.Version = versionNumber;
+                            logger.LogInformation($"Detected Haroldcoin version from getinfo: {versionNumber}");
+                        }
+                        else
+                        {
+                            fallbackCapabilities.Version = 210000; // Default to v0.21.0
+                            logger.LogWarning("Could not detect Haroldcoin version, using default 210000");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning($"Failed to get version info: {ex.Message}");
+                    fallbackCapabilities.Version = 210000; // Use a reasonable default (v0.21.0)
+                }
+                
+                // Test for scantxoutset support
+                try
+                {
+                    var testCmd = await rpcClient.SendCommandAsync(new NBitcoin.RPC.RPCRequest("help", new[] { "scantxoutset" }), token);
+                    fallbackCapabilities.SupportScanUTXOSet = !testCmd.Error?.Message.Contains("method not found") ?? false;
+                }
+                catch
+                {
+                    fallbackCapabilities.SupportScanUTXOSet = false;
+                }
+                
+                // Assume basic segwit support
+                fallbackCapabilities.SupportSegwit = true;
+                
+                // Conservative default for taproot
+                fallbackCapabilities.SupportTaproot = false;
+                
+                // Test for testmempoolaccept
+                try
+                {
+                    var testCmd = await rpcClient.SendCommandAsync(new NBitcoin.RPC.RPCRequest("help", new[] { "testmempoolaccept" }), token);
+                    fallbackCapabilities.SupportTestMempoolAccept = !testCmd.Error?.Message.Contains("method not found") ?? false;
+                }
+                catch
+                {
+                    fallbackCapabilities.SupportTestMempoolAccept = false;
+                }
+                
+                logger.LogInformation($"Created fallback capabilities for Haroldcoin: " +
+                    $"ScanUTXOSet={fallbackCapabilities.SupportScanUTXOSet}, " +
+                    $"Segwit={fallbackCapabilities.SupportSegwit}, " +
+                    $"Taproot={fallbackCapabilities.SupportTaproot}, " +
+                    $"TestMempoolAccept={fallbackCapabilities.SupportTestMempoolAccept}");
+                
+                return fallbackCapabilities;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Error scanning RPC capabilities for Haroldcoin");
+                // Return minimal capabilities to prevent NullReferenceException
+                return new NBitcoin.RPC.RPCCapabilities
+                {
+                    Version = 210000, // v0.21.0
+                    SupportScanUTXOSet = false,
+                    SupportSegwit = true,
+                    SupportTaproot = false,
+                    SupportTestMempoolAccept = false
+                };
             }
         }
     }
